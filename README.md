@@ -119,7 +119,7 @@ etc. (not MySQL syntax).
 - Your own SQL is your responsibility: keep using `?` for values; don't build query strings from user input.
 
 ## Docs
-- [`docs/developer.md`](docs/developer.md) — full usage, rules, and an oxmysql→vox_sqlite migration table.
+- [`docs/developer.md`](docs/developer.md) — full usage, rules, and migration guidance.
 - [`docs/tech.md`](docs/tech.md) — how it works and why (the HELIX constraints it solves).
 
 ## License

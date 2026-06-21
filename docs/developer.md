@@ -39,14 +39,7 @@ db:DropTable('players')
   `TruncateTable`, `DropTable`, `TableExists`) validate identifiers and reject anything that isn't a plain
   `[A-Za-z0-9_]` name. Never pass player input as a table/column name, and never string-build SQL from user input.
 
-## Migrating from oxmysql (FiveM)
-| oxmysql | vox_sqlite |
-|---|---|
-| `MySQL.query(q, p, cb)` | `db:QueryAsync(q, p, cb)` (or sync `db:Query(q, p)`) |
-| `MySQL.single(q, p, cb)` | `db:Single(q, p)` |
-| `MySQL.scalar(q, p, cb)` | `db:Scalar(q, p)` |
-| `MySQL.update/insert(q, p)` | `db:Execute(q, p)` |
-| `ON DUPLICATE KEY UPDATE` | `db:Upsert(table, keyCols, data)` |
-| `json.encode/decode` | `db:Encode` / `db:Decode` |
-
-Remember to convert the SQL dialect (MySQL → SQLite) — vox_sqlite standardizes the call shape, not the SQL.
+## Coming from another database wrapper?
+Map your old data calls onto the exports above (`Query`/`Single`/`Scalar`/`Execute` + async, `Upsert`,
+the schema helpers). The API surface is what changes — the SQL stays plain **SQLite** (`AUTOINCREMENT`,
+`ON CONFLICT`, `?` value params).
