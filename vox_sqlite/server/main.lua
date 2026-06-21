@@ -83,6 +83,31 @@ local function Execute(sql, params)
     return ok and res or false
 end
 
+-- INSERT returning the new row id (SQLite `last_insert_rowid()`), or nil on failure.
+-- Safe on the single owned connection: nothing else can interleave a write between the
+-- INSERT and the id read (HELIX Lua is single-threaded per resource and vox_sqlite owns
+-- the only handle to this file). For a table without an INTEGER PRIMARY KEY the value is
+-- the implicit rowid — still a truthy success signal.
+local function Insert(sql, params)
+    ensure()
+    local ok = pcall(function() return Database.Execute(sql, params or {}) end)
+    if not ok then return nil end
+    local row = Single("SELECT last_insert_rowid() AS id")
+    return row and row.id or nil
+end
+
+-- INSERT / UPDATE / DELETE returning the affected-row count (SQLite `changes()`).
+-- Returns -1 on execution failure so a caller can tell "the statement errored" apart
+-- from "ran fine, matched 0 rows" (a 0-row DELETE is still a success). A plain SELECT
+-- does not disturb `changes()`, so reading it on the next line is correct.
+local function ExecuteCount(sql, params)
+    ensure()
+    local ok = pcall(function() return Database.Execute(sql, params or {}) end)
+    if not ok then return -1 end
+    local row = Single("SELECT changes() AS n")
+    return (row and row.n) or 0
+end
+
 -- Async variants (won't block the game thread on heavy queries).
 local function QueryAsync(sql, params, cb)
     ensure()
@@ -190,6 +215,8 @@ exports("vox_sqlite", "Query", Query)
 exports("vox_sqlite", "Single", Single)
 exports("vox_sqlite", "Scalar", Scalar)
 exports("vox_sqlite", "Execute", Execute)
+exports("vox_sqlite", "Insert", Insert)
+exports("vox_sqlite", "ExecuteCount", ExecuteCount)
 exports("vox_sqlite", "QueryAsync", QueryAsync)
 exports("vox_sqlite", "ExecuteAsync", ExecuteAsync)
 exports("vox_sqlite", "Upsert", Upsert)

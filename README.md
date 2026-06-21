@@ -4,7 +4,7 @@ A tiny, free **single-database service for HELIX** servers. One resource owns th
 every other resource shares it through `exports`. Drop it in, load it first, and stop fighting the
 database.
 
-> Verified on HELIX (UE 5.7.4 / Lua 5.4).
+> Verified on HELIX (UE 5.7.4 / Lua 5.4). **v1.1.0** — see [CHANGELOG](CHANGELOG.md).
 
 ## Why you need this
 
@@ -67,6 +67,12 @@ exports['vox_sqlite']:Execute(
 exports['vox_sqlite']:Execute(
     'INSERT INTO players (id, name, cash) VALUES (?, ?, ?)', { id, 'Grizzy', 500 })
 
+-- New-row id (AUTOINCREMENT PK) and affected-row count
+local newId = exports['vox_sqlite']:Insert(
+    'INSERT INTO logs (msg) VALUES (?)', { 'hello' })           -- last_insert_rowid()
+local removed = exports['vox_sqlite']:ExecuteCount(
+    'DELETE FROM logs WHERE ts < ?', { cutoff })                -- changes() (affected rows)
+
 -- Async (won't block the game thread)
 exports['vox_sqlite']:QueryAsync('SELECT * FROM big_table', {}, function(rows)
     print('rows:', #rows)
@@ -88,6 +94,8 @@ local data = exports['vox_sqlite']:Decode(blob)
 | `Single(sql, params)` | `table\|nil` | first row |
 | `Scalar(sql, params)` | `any\|nil` | first column of first row |
 | `Execute(sql, params)` | `boolean` | INSERT / UPDATE / CREATE / DELETE |
+| `Insert(sql, params)` | `number\|nil` | INSERT → new row id (`last_insert_rowid()`); nil on error |
+| `ExecuteCount(sql, params)` | `number` | UPDATE / DELETE → affected rows (`changes()`); `-1` on error |
 | `QueryAsync(sql, params, cb)` | — | `cb(rows)` |
 | `ExecuteAsync(sql, params, cb)` | — | `cb(ok)` |
 | `Upsert(table, keyCols, data)` | `boolean` | SQLite `ON CONFLICT` upsert |

@@ -12,6 +12,9 @@ local one   = db:Single('SELECT * FROM players WHERE id = ?', { id })    -- firs
 local n     = db:Scalar('SELECT COUNT(*) FROM players')                   -- first col of first row
 local ok    = db:Execute('UPDATE players SET cash = ? WHERE id = ?', { 500, id })
 
+local newId = db:Insert('INSERT INTO players (name) VALUES (?)', { name })  -- new row id, or nil
+local n     = db:ExecuteCount('DELETE FROM players WHERE id = ?', { id })   -- affected rows; -1 on error
+
 db:QueryAsync('SELECT * FROM big', {}, function(rows) end)
 db:ExecuteAsync('DELETE FROM logs WHERE ts < ?', { cutoff }, function(ok) end)
 
