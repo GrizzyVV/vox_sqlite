@@ -42,6 +42,14 @@ local function rowsToTables(rs)
     return out
 end
 
+-- SQL identifiers (table/column names) CANNOT be parameterized — only values can.
+-- Anywhere a name is interpolated into SQL, it must be a plain identifier. This guard
+-- rejects anything that isn't, so caller mistakes (or player input wrongly used as a
+-- name) can't inject. VALUES always go through `?` params and are never interpolated.
+local function validIdent(name)
+    return type(name) == "string" and name:match("^[A-Za-z_][A-Za-z0-9_]*$") ~= nil
+end
+
 -- ---------------------------------------------------------------------------
 -- Core API
 -- ---------------------------------------------------------------------------
@@ -98,14 +106,19 @@ end
 -- on a key conflict the non-key columns are updated (SQLite ON CONFLICT — there is no
 -- MySQL `ON DUPLICATE KEY UPDATE`).
 local function Upsert(tableName, keyCols, data)
+    if not validIdent(tableName) then return false end
     local cols, marks, params = {}, {}, {}
     for col, val in pairs(data) do
+        if not validIdent(col) then return false end   -- reject unsafe column names
         cols[#cols + 1] = col
         marks[#marks + 1] = "?"
         params[#params + 1] = val
     end
     local isKey = {}
-    for _, k in ipairs(keyCols) do isKey[k] = true end
+    for _, k in ipairs(keyCols) do
+        if not validIdent(k) then return false end
+        isKey[k] = true
+    end
     local sets = {}
     for _, col in ipairs(cols) do
         if not isKey[col] then sets[#sets + 1] = col .. " = excluded." .. col end
@@ -114,6 +127,42 @@ local function Upsert(tableName, keyCols, data)
         :format(tableName, table.concat(cols, ", "), table.concat(marks, ", "),
                 table.concat(keyCols, ", "), table.concat(sets, ", "))
     return Execute(sql, params)
+end
+
+-- ---------------------------------------------------------------------------
+-- Schema helpers (DDL). Table/column names are validated as identifiers; the
+-- type/constraint text in a column def is developer-authored DDL.
+-- ---------------------------------------------------------------------------
+
+-- CreateTable('players', { 'id TEXT PRIMARY KEY', 'name TEXT', 'cash INTEGER DEFAULT 0' })
+-- Each column def must begin with a valid identifier. ifNotExists defaults to true.
+local function CreateTable(name, columnDefs, ifNotExists)
+    if not validIdent(name) then return false end
+    if type(columnDefs) ~= "table" or #columnDefs == 0 then return false end
+    for _, def in ipairs(columnDefs) do
+        local ident = type(def) == "string" and def:match("^%s*([A-Za-z_][A-Za-z0-9_]*)")
+        if not ident then return false end          -- every def must start with a column name
+    end
+    local ine = (ifNotExists ~= false) and "IF NOT EXISTS " or ""
+    return Execute(("CREATE TABLE %s%s (%s)"):format(ine, name, table.concat(columnDefs, ", ")), {})
+end
+
+-- Empty a table (SQLite has no TRUNCATE) and reset its AUTOINCREMENT counter.
+local function TruncateTable(name)
+    if not validIdent(name) then return false end
+    local ok = Execute(("DELETE FROM %s"):format(name), {})
+    Execute("DELETE FROM sqlite_sequence WHERE name = ?", { name })   -- value param: safe
+    return ok
+end
+
+local function DropTable(name)
+    if not validIdent(name) then return false end
+    return Execute(("DROP TABLE IF EXISTS %s"):format(name), {})
+end
+
+local function TableExists(name)
+    if not validIdent(name) then return false end
+    return Scalar("SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?", { name }) ~= nil
 end
 
 -- JSON blob helpers (store Lua tables as TEXT columns).
@@ -144,6 +193,10 @@ exports("vox_sqlite", "Execute", Execute)
 exports("vox_sqlite", "QueryAsync", QueryAsync)
 exports("vox_sqlite", "ExecuteAsync", ExecuteAsync)
 exports("vox_sqlite", "Upsert", Upsert)
+exports("vox_sqlite", "CreateTable", CreateTable)
+exports("vox_sqlite", "TruncateTable", TruncateTable)
+exports("vox_sqlite", "DropTable", DropTable)
+exports("vox_sqlite", "TableExists", TableExists)
 exports("vox_sqlite", "Encode", Encode)
 exports("vox_sqlite", "Decode", Decode)
 exports("vox_sqlite", "IsReady", IsReady)

@@ -1,6 +1,6 @@
 # vox_sqlite — Developer
 
-How to use the shared database from your own resources. Server-side; call after vox_sqlite has loaded
+How other resources use the shared database. Server-side; call after vox_sqlite has loaded
 (list it **first** in `config.json`).
 
 ## Exports
@@ -19,6 +19,12 @@ db:Upsert('players', { 'id' }, { id = id, name = name, cash = 500 })      -- SQL
 local blob = db:Encode({ items = {} })                                    -- JSON for TEXT columns
 local data = db:Decode(blob)
 local ready = db:IsReady()
+
+-- Schema helpers
+db:CreateTable('players', { 'id TEXT PRIMARY KEY', 'name TEXT', 'cash INTEGER DEFAULT 0' })
+local has = db:TableExists('players')
+db:TruncateTable('players')   -- empties + resets AUTOINCREMENT
+db:DropTable('players')
 ```
 
 ## Rules
@@ -29,6 +35,9 @@ local ready = db:IsReady()
   exclusive-lock `disk I/O error`.
 - Call at runtime (event handlers), not at top-level script load, unless your resource is guaranteed to
   load after vox_sqlite.
+- **Security:** values are safe via `?` params; the name-taking helpers (`Upsert`, `CreateTable`,
+  `TruncateTable`, `DropTable`, `TableExists`) validate identifiers and reject anything that isn't a plain
+  `[A-Za-z0-9_]` name. Never pass player input as a table/column name, and never string-build SQL from user input.
 
 ## Migrating from oxmysql (FiveM)
 | oxmysql | vox_sqlite |
@@ -40,4 +49,4 @@ local ready = db:IsReady()
 | `ON DUPLICATE KEY UPDATE` | `db:Upsert(table, keyCols, data)` |
 | `json.encode/decode` | `db:Encode` / `db:Decode` |
 
-vox_sqlite standardizes the **call shape**, not the SQL — convert the dialect (MySQL → SQLite) yourself.
+Remember to convert the SQL dialect (MySQL → SQLite) — vox_sqlite standardizes the call shape, not the SQL.

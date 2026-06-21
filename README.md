@@ -91,6 +91,10 @@ local data = exports['vox_sqlite']:Decode(blob)
 | `QueryAsync(sql, params, cb)` | — | `cb(rows)` |
 | `ExecuteAsync(sql, params, cb)` | — | `cb(ok)` |
 | `Upsert(table, keyCols, data)` | `boolean` | SQLite `ON CONFLICT` upsert |
+| `CreateTable(name, columnDefs, ifNotExists?)` | `boolean` | `CreateTable('players', { 'id TEXT PRIMARY KEY', 'cash INTEGER DEFAULT 0' })` |
+| `TruncateTable(name)` | `boolean` | empties the table + resets AUTOINCREMENT |
+| `DropTable(name)` | `boolean` | `DROP TABLE IF EXISTS` |
+| `TableExists(name)` | `boolean` | — |
 | `Encode(v)` / `Decode(s)` | `string` / `any` | JSON blob helpers |
 | `IsReady()` | `boolean` | is the connection open |
 
@@ -103,6 +107,16 @@ etc. (not MySQL syntax).
 - **Load order matters.** `exports['vox_sqlite']` is nil until vox_sqlite has loaded — list it first, and
   prefer calling at runtime (event handlers) over top-level script load.
 - One server, one database file. The file is locked while the game runs.
+
+## Security
+
+- **Values are parameterized.** Always pass data as `?` placeholders + a params table — it's never
+  concatenated into SQL, so player input can't inject. ✅
+- **Identifiers are validated.** SQLite can't parameterize table/column *names*, so the helpers that take
+  a name (`Upsert`, `CreateTable`, `TruncateTable`, `DropTable`, `TableExists`) validate it against
+  `^[A-Za-z_][A-Za-z0-9_]*$` and refuse anything else. **Never** pass player input as a table/column name.
+- **Server-side only.** Clients can't call these exports, so players never touch the database directly.
+- Your own SQL is your responsibility: keep using `?` for values; don't build query strings from user input.
 
 ## Docs
 - [`docs/developer.md`](docs/developer.md) — full usage, rules, and an oxmysql→vox_sqlite migration table.
