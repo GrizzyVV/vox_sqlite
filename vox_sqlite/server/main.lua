@@ -207,6 +207,101 @@ local function IsReady()
 end
 
 -- ---------------------------------------------------------------------------
+-- oxmysql-compatible API (the FiveM MySQL.* surface). vox_sqlite OWNS this adapter so converted resources call
+-- exports.vox_sqlite:query/single/... DIRECTLY — no injected compat shim. Handles: named @params -> positional ?,
+-- MySQL->SQLite dialect, and oxmysql return-contract coercion (vox_sqlite stringifies; oxmysql returns numbers).
+-- ---------------------------------------------------------------------------
+local function _translate_named(sql, params)
+    if type(params) ~= "table" then return sql, params end
+    local named = false
+    for k in pairs(params) do if type(k) == "string" then named = true break end end
+    if not named then return sql, params end
+    local out, ordered, i, n, oi = {}, {}, 1, #sql, 0
+    local quote = nil
+    while i <= n do
+        local c = sql:sub(i, i)
+        if quote then out[#out+1] = c; if c == quote then quote = nil end; i = i + 1
+        elseif c == "'" or c == '"' or c == "`" then quote = c; out[#out+1] = c; i = i + 1
+        elseif c == "@" or c == ":" then
+            local prev = sql:sub(i-1, i-1)
+            local name = (prev == "" or not prev:match("[%w_@:]")) and sql:match("^[%w_]+", i+1) or nil
+            if name then oi = oi + 1; ordered[oi] = params[name]; if ordered[oi] == nil then ordered[oi] = params["@"..name] end; if ordered[oi] == nil then ordered[oi] = params[":"..name] end
+                out[#out+1] = "?"; i = i + 1 + #name
+            else out[#out+1] = c; i = i + 1 end
+        else out[#out+1] = c; i = i + 1 end
+    end
+    return table.concat(out), ordered
+end
+local function _ci(w) return (w:gsub("%a", function(c) return "["..c:upper()..c:lower().."]" end)) end
+local _ONDUP = "%f[%w]".._ci("on").."%s+".._ci("duplicate").."%s+".._ci("key").."%s+".._ci("update")
+local function _dialect(sql)
+    if type(sql) ~= "string" then return sql end
+    sql = sql:gsub("%f[%w]".._ci("insert").."(%s+)".._ci("ignore").."%f[%W]", "INSERT%1OR IGNORE")
+    sql = sql:gsub("%f[%w]".._ci("unix_timestamp").."%s*%(%s*%)", "strftime('%%s','now')")
+    sql = sql:gsub("%f[%w]".._ci("now").."%s*%(%s*%)", "CURRENT_TIMESTAMP")
+    sql = sql:gsub("%f[%w]".._ci("curdate").."%s*%(%s*%)", "date('now')")
+    sql = sql:gsub("%f[%w]".._ci("curtime").."%s*%(%s*%)", "time('now')")
+    if sql:find(_ONDUP) then
+        sql = sql:gsub("^(%s*)".._ci("insert").."(%s+)".._ci("into"), "%1INSERT OR REPLACE%2INTO", 1)
+        sql = sql:gsub(_ONDUP..".*$", "")
+    end
+    return sql
+end
+local function _prep(sql, params) return _translate_named(_dialect(sql), params) end
+local function _tonum(v) return tonumber(v) or v end
+local function _numscalar(v) if type(v) ~= "string" then return v end local nbr = tonumber(v); if nbr ~= nil and tostring(nbr) == v then return nbr end return v end
+local function _mk(fn, post)
+    -- oxmysql params: a single table `{p1,p2}` OR trailing varargs `(sql, p1, p2, ...)`. (Async callbacks stay consumer-side
+    -- — the converter rewrites async to `cb(export(...))` — so vox_sqlite never receives a cb across the boundary.)
+    return function(_self, sql, ...)
+        local n = select("#", ...)
+        local params
+        if n == 1 and type((...)) == "table" then params = (...)
+        elseif n >= 1 then params = { ... }
+        else params = {} end
+        local s, p = _prep(sql, params)
+        local r = fn(s, p)
+        if post then r = post(r) end
+        return r
+    end
+end
+local m_query, m_single = _mk(Query), _mk(Single)
+local m_scalar  = _mk(Scalar, _numscalar)
+local m_insert  = _mk(Insert, _tonum)
+local m_execute = _mk(ExecuteCount, _tonum)
+local function m_prepare(_self, sql, sets, cb)
+    local s = _dialect(sql)
+    local isSel = type(s) == "string" and s:match("^%s*[Ss][Ee][Ll][Ee][Cc][Tt]") ~= nil
+    local r
+    if type(sets) == "table" and type(sets[1]) == "table" then
+        local total = 0
+        for _, ps in ipairs(sets) do local q, p = _translate_named(s, ps); if isSel then r = Query(q, p) else total = total + (tonumber(ExecuteCount(q, p)) or 0) end end
+        if not isSel then r = total end
+    else
+        local q, p = _translate_named(s, sets); r = isSel and Query(q, p) or (tonumber(ExecuteCount(q, p)) or 0)
+    end
+    if type(cb) == "function" then cb(r) end
+    return r
+end
+local function m_transaction(_self, queries, cb)
+    local ok = true
+    if type(queries) == "table" then
+        for _, q in ipairs(queries) do
+            local sql, params = q.query or q[1], q.values or q[2]
+            if sql then local s, p = _prep(sql, params); if Execute(s, p) == false then ok = false end end
+        end
+    end
+    if type(cb) == "function" then cb(ok) end
+    return ok
+end
+local function m_ready(_self, cb) if type(cb) == "function" then cb() end return true end
+for name, fn in pairs({ query = m_query, single = m_single, scalar = m_scalar, insert = m_insert,
+                        update = m_execute, execute = m_execute, prepare = m_prepare,
+                        transaction = m_transaction, ready = m_ready }) do
+    exports("vox_sqlite", name, fn)
+end
+
+-- ---------------------------------------------------------------------------
 -- Boot + exports
 -- ---------------------------------------------------------------------------
 local opened = ensure()
