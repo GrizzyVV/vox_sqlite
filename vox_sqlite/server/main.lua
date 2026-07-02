@@ -253,7 +253,11 @@ local function _numscalar(v) if type(v) ~= "string" then return v end local nbr 
 local function _mk(fn, post)
     -- oxmysql params: a single table `{p1,p2}` OR trailing varargs `(sql, p1, p2, ...)`. (Async callbacks stay consumer-side
     -- — the converter rewrites async to `cb(export(...))` — so vox_sqlite never receives a cb across the boundary.)
-    return function(_self, sql, ...)
+    -- NO self param (probe-caught 2026-07-02): the HELIX exports proxy ALWAYS discards the caller's first/colon arg
+    -- before forwarding, so a registered fn sees (sql, ...) directly. The old (_self, sql, ...) signature meant EVERY
+    -- adapter call arrived one-arg-shifted (sql landed in _self) -> silent nil/false. Raw Execute/Single/Query (no self)
+    -- were always correct — which is why schema installs worked while the adapter surface was broken.
+    return function(sql, ...)
         local n = select("#", ...)
         local params
         if n == 1 and type((...)) == "table" then params = (...)
@@ -282,7 +286,7 @@ local m_query, m_single = _mk(Query, _numrows), _mk(Single, _numrow)
 local m_scalar  = _mk(Scalar, _numscalar)
 local m_insert  = _mk(Insert, _tonum)
 local m_execute = _mk(ExecuteCount, _tonum)
-local function m_prepare(_self, sql, sets, cb)
+local function m_prepare(sql, sets, cb)
     local s = _dialect(sql)
     local isSel = type(s) == "string" and s:match("^%s*[Ss][Ee][Ll][Ee][Cc][Tt]") ~= nil
     local r
@@ -296,7 +300,7 @@ local function m_prepare(_self, sql, sets, cb)
     if type(cb) == "function" then cb(r) end
     return r
 end
-local function m_transaction(_self, queries, cb)
+local function m_transaction(queries, cb)
     local ok = true
     if type(queries) == "table" then
         for _, q in ipairs(queries) do
@@ -307,7 +311,7 @@ local function m_transaction(_self, queries, cb)
     if type(cb) == "function" then cb(ok) end
     return ok
 end
-local function m_ready(_self, cb) if type(cb) == "function" then cb() end return true end
+local function m_ready(cb) if type(cb) == "function" then cb() end return true end
 for name, fn in pairs({ query = m_query, single = m_single, scalar = m_scalar, insert = m_insert,
                         update = m_execute, execute = m_execute, prepare = m_prepare,
                         transaction = m_transaction, ready = m_ready }) do
