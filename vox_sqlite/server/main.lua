@@ -265,7 +265,20 @@ local function _mk(fn, post)
         return r
     end
 end
-local m_query, m_single = _mk(Query), _mk(Single)
+-- ROW coercion (parity-probe finding 2026-07-02): SQLite/Database.Select STRINGIFIES numeric columns; oxmysql returns
+-- NUMBERS. Without this, converted code doing `row.money > x` throws (string vs number compare) and `row.v == 0` is
+-- always false. _numscalar is round-trip-safe: "4242"->4242 but "0123" (leading zero) and "12.30" stay strings.
+local function _numrow(r)
+    if type(r) ~= "table" then return r end
+    for k, v in pairs(r) do r[k] = _numscalar(v) end
+    return r
+end
+local function _numrows(rs)
+    if type(rs) ~= "table" then return rs end
+    for i = 1, #rs do _numrow(rs[i]) end
+    return rs
+end
+local m_query, m_single = _mk(Query, _numrows), _mk(Single, _numrow)
 local m_scalar  = _mk(Scalar, _numscalar)
 local m_insert  = _mk(Insert, _tonum)
 local m_execute = _mk(ExecuteCount, _tonum)
