@@ -4,11 +4,14 @@ A tiny, free **single-database service for HELIX** servers. One resource owns th
 every other resource shares it through `exports`. Drop it in, load it first, and stop fighting the
 database.
 
-> Verified on HELIX (UE 5.7.4 / Lua 5.4). **v1.1.0** — see [CHANGELOG](CHANGELOG.md).
+> Verified on HELIX (UE 5.7.4 / Lua 5.4). **v1.2.0** — see [CHANGELOG](CHANGELOG.md).
 
 ## Why you need this
 
-HELIX's `Database` has two behaviours that bite as soon as you have more than one resource:
+vox_sqlite is a thin **broker over the engine-native `Database` global** (HELIX ships
+`Database.Initialize/Execute/Select/ExecuteAsync/SelectAsync/Close`). It does **not** hand-roll
+its own SQLite — the engine owns the driver. What it adds is single-ownership and a compat layer,
+because HELIX's `Database` has two behaviours that bite as soon as you have more than one resource:
 
 1. **`Database.Initialize(file)` must be called exactly once per file.** Call it a second time on the
    same file and you get `disk I/O error`.
@@ -17,11 +20,14 @@ HELIX's `Database` has two behaviours that bite as soon as you have more than on
 
 So you can't just have each resource open the shared database itself. **One** resource has to own the
 connection and hand it out. That's `vox_sqlite`: it initializes once and exposes the database to every
-other resource via `exports`.
+other resource via `exports`. This single-owner broker pattern is the same one HELIX's native `qb-core`
+uses — it owns `qbcore.db`, calls `Database.*` directly, and exposes a `DatabaseAction` export that
+satellite resources go through instead of touching `Database` themselves.
 
 It also smooths over the rough edges: result rows come back as **plain Lua tables** (HELIX's
 `row.Columns` needs `:ToTable()` and errors on direct field access), plus helpers for JSON blobs and
-SQLite upserts.
+SQLite upserts. And for resources being ported off FiveM's oxmysql, it ships an
+**oxmysql-compatible `MySQL.*` adapter** (see [oxmysql compatibility](#oxmysql-compatibility) below).
 
 ## Install
 
@@ -108,6 +114,42 @@ local data = exports['vox_sqlite']:Decode(blob)
 
 `params` is always a table (use `?` placeholders). SQL is plain SQLite — `AUTOINCREMENT`, `ON CONFLICT`,
 etc. (not MySQL syntax).
+
+## oxmysql compatibility
+
+Porting a resource that used FiveM's **oxmysql** (`MySQL.query`, `MySQL.single`, …)? vox_sqlite owns a
+lowercase, oxmysql-shaped adapter so converted code calls the exports **directly** — no injected shim:
+
+```lua
+local rows = exports['vox_sqlite']:query('SELECT * FROM users WHERE id = @id', { ['@id'] = id })
+local one  = exports['vox_sqlite']:single('SELECT * FROM users WHERE id = ?', { id })
+local n    = exports['vox_sqlite']:scalar('SELECT COUNT(*) FROM users')
+local newId = exports['vox_sqlite']:insert('INSERT INTO logs (msg) VALUES (?)', { 'hi' })  -- insertId
+local hit   = exports['vox_sqlite']:update('UPDATE users SET cash = ? WHERE id = ?', { 500, id })
+```
+
+| Adapter export | oxmysql shape |
+|---|---|
+| `query(sql, params, cb?)` | array of rows |
+| `single(sql, params, cb?)` | first row |
+| `scalar(sql, params, cb?)` | first value |
+| `insert(sql, params, cb?)` | `insertId` (`last_insert_rowid()`) |
+| `update` / `execute(sql, params, cb?)` | affected rows (`changes()`) |
+| `prepare(sql, sets, cb?)` | single statement or batched param-sets |
+| `transaction(queries, cb?)` | runs `{ query, values }` list; returns overall success |
+| `ready(cb?)` | fires callback, reports readiness |
+
+What the adapter handles for you:
+
+- **Named params** — `@name` / `:name` are rewritten to positional `?` (quote/backtick aware).
+- **MySQL → SQLite dialect** — `INSERT IGNORE`, `UNIX_TIMESTAMP()`, `NOW()`, `CURDATE()`, `CURTIME()`, and
+  `ON DUPLICATE KEY UPDATE` are rewritten to their SQLite equivalents.
+- **Params both ways** — a single `{ p1, p2 }` table **or** trailing `(sql, p1, p2, ...)` varargs.
+- **Numeric coercion** — native `Database.Select` returns numeric columns as **strings**; the adapter
+  coerces them back to numbers so `row.money > x` works like it did on oxmysql (round-trip-safe).
+
+The capitalized native surface (`Query`/`Execute`/…) and this lowercase adapter share the same owned
+connection — mix them freely.
 
 ## Notes
 

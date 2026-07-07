@@ -1,4 +1,10 @@
 -- vox_sqlite — the single SQLite database service for a HELIX server.
+-- Version: 1.2.0
+--
+-- It WRAPS the engine-native `Database` global (Initialize/Execute/Select/ExecuteAsync/
+-- SelectAsync/Close — positional string params, SQLite). It does NOT hand-roll its own
+-- SQLite; the engine owns the driver. vox_sqlite is the single-owner BROKER on top of it,
+-- and additionally ships an oxmysql-compatible `MySQL.*` adapter (see below).
 --
 -- WHY THIS EXISTS (verified on UE 5.7.4):
 --   * `Database.Initialize(file)` must be called EXACTLY ONCE per file — a second call
@@ -272,6 +278,10 @@ end
 -- ROW coercion (parity-probe finding 2026-07-02): SQLite/Database.Select STRINGIFIES numeric columns; oxmysql returns
 -- NUMBERS. Without this, converted code doing `row.money > x` throws (string vs number compare) and `row.v == 0` is
 -- always false. _numscalar is round-trip-safe: "4242"->4242 but "0123" (leading zero) and "12.30" stay strings.
+-- REQUIRED as of build 2026-07-07: native `Database.Select` still returns numeric columns as STRINGS, so this
+-- coercion is load-bearing for oxmysql return-contract parity. DO NOT remove.
+-- RE-VERIFY EACH BUILD: if a future HELIX build makes `Database.Select` return real numbers, this whole
+-- _numscalar/_numrow/_numrows layer can be dropped (the _mk post-processors would then be pass-throughs).
 local function _numrow(r)
     if type(r) ~= "table" then return r end
     for k, v in pairs(r) do r[k] = _numscalar(v) end

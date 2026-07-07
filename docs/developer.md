@@ -46,3 +46,23 @@ db:DropTable('players')
 Map your old data calls onto the exports above (`Query`/`Single`/`Scalar`/`Execute` + async, `Upsert`,
 the schema helpers). The API surface is what changes — the SQL stays plain **SQLite** (`AUTOINCREMENT`,
 `ON CONFLICT`, `?` value params).
+
+### Coming from oxmysql (`MySQL.*`)?
+vox_sqlite ships an **oxmysql-compatible adapter** so you don't have to rewrite the call sites — use the
+lowercase exports directly:
+
+```lua
+local db = exports['vox_sqlite']
+local rows = db:query('SELECT * FROM users WHERE id = @id', { ['@id'] = id })  -- named params OK
+local one  = db:single('SELECT * FROM users WHERE id = ?', { id })
+local n    = db:scalar('SELECT COUNT(*) FROM users')
+local newId = db:insert('INSERT INTO logs (msg) VALUES (?)', { 'hi' })  -- insertId
+local hit   = db:update('UPDATE users SET cash = ? WHERE id = ?', { 500, id })  -- affected rows
+db:transaction({ { query = 'UPDATE a SET x=?', values = { 1 } }, { query = 'UPDATE b SET y=?', values = { 2 } } })
+```
+
+The adapter (`query`/`single`/`scalar`/`insert`/`update`/`execute`/`prepare`/`transaction`/`ready`) handles
+named params (`@name`/`:name` → `?`), MySQL→SQLite dialect rewrites (`INSERT IGNORE`, `NOW()`,
+`UNIX_TIMESTAMP()`, `ON DUPLICATE KEY UPDATE`, …), single-table-or-varargs params, and numeric coercion
+(native `Select` returns numbers as strings; the adapter coerces them back). Mix the lowercase adapter and
+the capitalized native surface freely — same owned connection.

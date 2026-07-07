@@ -9,6 +9,15 @@ HELIX's `Database` is single-connection-per-file and exclusive:
 Therefore multiple resources cannot independently share one database. A single owner must hold the
 connection and expose it. Cross-package `exports` are confirmed working, so a service is viable.
 
+vox_sqlite **wraps the engine-native `Database` global** (`Initialize/Execute/Select/ExecuteAsync/
+SelectAsync/Close`, positional string params, SQLite). It does not implement SQLite itself — the engine
+owns the driver; vox_sqlite owns the single handle and the compat layer on top.
+
+This single-owner broker pattern is independently validated by HELIX's native **`qb-core`**, which owns
+`qbcore.db`, calls `Database.*` directly, and exposes a **`DatabaseAction`** export that satellite
+resources call instead of ever touching `Database` themselves — exactly vox_sqlite's model. The pattern
+is the correct answer to the once-only-init + exclusive-lock constraints, not a vox_sqlite quirk.
+
 ## Design
 - **One owner.** vox_sqlite calls `Database.Initialize(DatabaseFile)` exactly once, guarded by an
   `initialized` flag that is set **regardless of success** so it can never retry (the failure mode).
@@ -22,6 +31,19 @@ connection and expose it. Cross-package `exports` are confirmed working, so a se
 - **Upsert** builds SQLite `INSERT ... ON CONFLICT(key) DO UPDATE SET col = excluded.col` (there is no
   MySQL `ON DUPLICATE KEY UPDATE`).
 - **JSON blobs** via `JSON.stringify/parse` (capital J).
+- **oxmysql compat adapter.** A second, lowercase export surface (`query`/`single`/`scalar`/`insert`/
+  `update`/`execute`/`prepare`/`transaction`/`ready`) mirroring FiveM's `MySQL.*` contract, so resources
+  ported off oxmysql call vox_sqlite directly (no injected shim). It layers three translations over the
+  core: **named params** (`@name`/`:name` → positional `?`, quote-aware `_translate_named`), **MySQL→SQLite
+  dialect** (`_dialect`: `INSERT IGNORE`, `UNIX_TIMESTAMP`, `NOW`, `CURDATE`, `CURTIME`, `ON DUPLICATE KEY
+  UPDATE`), and **numeric coercion** (`_numscalar`/`_numrow`/`_numrows`).
+  - *Numeric coercion — why:* native `Database.Select` returns numeric columns as **strings** while oxmysql
+    returns numbers, so without coercion `row.money > x` throws (string vs number). The coercion is
+    round-trip-safe (leading-zero / fixed-decimal strings are preserved). **Re-verify each HELIX build:** if
+    a future build makes `Select` return real numbers, this layer can be dropped.
+  - *One-arg-shift fix (2026-07-02):* the HELIX exports proxy always discards the caller's colon/`self`
+    argument before forwarding, so adapter fns take `(sql, ...)` — the earlier `(_self, sql, ...)` signature
+    silently one-arg-shifted every adapter call. The capitalized surface (no `self`) was never affected.
 
 ## Files
 - `shared/config.lua` — `VoxSQLiteConfig` (`DatabaseFile`, `Verbose`).
