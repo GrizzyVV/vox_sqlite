@@ -1,5 +1,6 @@
 -- vox_sqlite — the single SQLite database service for a HELIX server.
--- Version: 1.2.0
+-- Version: 1.2.1  (2026-07-11: swallowed DB errors are now LOGGED via _logErr, Verbose-gated;
+--                  return contract unchanged — safe never-raise API preserved)
 --
 -- It WRAPS the engine-native `Database` global (Initialize/Execute/Select/ExecuteAsync/
 -- SelectAsync/Close — positional string params, SQLite). It does NOT hand-roll its own
@@ -24,12 +25,23 @@
 local DB_FILE = (VoxSQLiteConfig and VoxSQLiteConfig.DatabaseFile) or "server.db"
 local VERBOSE = not VoxSQLiteConfig or VoxSQLiteConfig.Verbose ~= false
 
+-- Surface a swallowed DB error to the console. The API keeps its safe never-raise return
+-- contract (Query->{}, Execute->false, Insert->nil, ExecuteCount->-1); the error is now
+-- LOGGED so a silent failure is diagnosable instead of vanishing. Gated on `Verbose`.
+local function _logErr(op, err, sql)
+    if VERBOSE then
+        print(("[vox_sqlite] %s FAILED: %s%s"):format(op, tostring(err),
+            sql and (" | sql=" .. tostring(sql)) or ""))
+    end
+end
+
 local initialized = false
 
 -- Initialize the one connection. Guarded so it can never run twice (the failure mode).
 local function ensure()
     if initialized then return true end
-    local ok = pcall(function() Database.Initialize(DB_FILE) end)
+    local ok, err = pcall(function() Database.Initialize(DB_FILE) end)
+    if not ok then _logErr("Initialize", err, DB_FILE) end
     initialized = true            -- set regardless: never attempt Initialize again
     return ok
 end
@@ -64,7 +76,7 @@ end
 local function Query(sql, params)
     ensure()
     local ok, rs = pcall(function() return Database.Select(sql, params or {}) end)
-    if not ok then return {} end
+    if not ok then _logErr("Query", rs, sql); return {} end
     return rowsToTables(rs)
 end
 
@@ -86,7 +98,8 @@ end
 local function Execute(sql, params)
     ensure()
     local ok, res = pcall(function() return Database.Execute(sql, params or {}) end)
-    return ok and res or false
+    if not ok then _logErr("Execute", res, sql); return false end
+    return res and true or false
 end
 
 -- INSERT returning the new row id (SQLite `last_insert_rowid()`), or nil on failure.
@@ -96,8 +109,8 @@ end
 -- the implicit rowid — still a truthy success signal.
 local function Insert(sql, params)
     ensure()
-    local ok = pcall(function() return Database.Execute(sql, params or {}) end)
-    if not ok then return nil end
+    local ok, err = pcall(function() return Database.Execute(sql, params or {}) end)
+    if not ok then _logErr("Insert", err, sql); return nil end
     local row = Single("SELECT last_insert_rowid() AS id")
     return row and row.id or nil
 end
@@ -108,8 +121,8 @@ end
 -- does not disturb `changes()`, so reading it on the next line is correct.
 local function ExecuteCount(sql, params)
     ensure()
-    local ok = pcall(function() return Database.Execute(sql, params or {}) end)
-    if not ok then return -1 end
+    local ok, err = pcall(function() return Database.Execute(sql, params or {}) end)
+    if not ok then _logErr("ExecuteCount", err, sql); return -1 end
     local row = Single("SELECT changes() AS n")
     return (row and row.n) or 0
 end
@@ -117,20 +130,22 @@ end
 -- Async variants (won't block the game thread on heavy queries).
 local function QueryAsync(sql, params, cb)
     ensure()
-    pcall(function()
+    local ok, err = pcall(function()
         Database.SelectAsync(sql, params or {}, function(rs)
             if cb then cb(rowsToTables(rs)) end
         end)
     end)
+    if not ok then _logErr("QueryAsync", err, sql) end
 end
 
 local function ExecuteAsync(sql, params, cb)
     ensure()
-    pcall(function()
+    local pok, perr = pcall(function()
         Database.ExecuteAsync(sql, params or {}, function(ok)
             if cb then cb(ok and true or false) end
         end)
     end)
+    if not pok then _logErr("ExecuteAsync", perr, sql) end
 end
 
 -- Convenience: SQLite upsert. keyCols identify the row; all of `data` is written, and
