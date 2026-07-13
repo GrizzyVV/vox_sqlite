@@ -6,6 +6,26 @@ database.
 
 > Verified on HELIX (UE 5.7.4 / Lua 5.4). **v1.2.0** — see [CHANGELOG](CHANGELOG.md).
 
+## Which should I use — vox_sqlite or vox_postgres?
+
+**vox_sqlite** (this resource) and **[vox_postgres](https://github.com/GrizzyVV/vox_postgres)** are
+**companions, not competitors** — most RP servers use **both**.
+
+| | **vox_sqlite** (this resource) | [vox_postgres](https://github.com/GrizzyVV/vox_postgres) |
+|---|---|---|
+| **Backend** | HELIX-native SQLite (local file) | External PostgreSQL via Supabase (over `HTTP.Request`) |
+| **Speed** | sub-millisecond; ~28k writes/sec batched | ~100–300 ms per op (internet round-trip) |
+| **Reach** | the game server only | shared — a website, dashboard, or another server can read/write it too |
+| **Best for** | the **hot path**: player saves, inventory, economy, jobs — anything frequent | **external data**: MDT, web dashboards, cross-server, analytics |
+| **Setup** | drop-in, zero config | a Supabase project + one Edge Function |
+
+**Rule of thumb**
+- **Default to vox_sqlite** for anything the game server reads/writes often — it's fast, stable, and local. This is your primary database.
+- **Reach for [vox_postgres](https://github.com/GrizzyVV/vox_postgres)** only when data must live *outside* the game server (a website showing player stats, a cross-server economy, analytics). Don't run the hot path through it — every call is a network round-trip.
+- **Use both** when you need both layers: SQLite as the primary store, Postgres for the external/shared layer.
+
+<sub>Benchmarked in-engine: SQLite ~28,000 writes/sec (batched) vs Postgres-over-HTTP ~200/sec (bulk). Postgres buys external access, not speed.</sub>
+
 ## Why you need this
 
 vox_sqlite is a thin **broker over the engine-native `Database` global** (HELIX ships
